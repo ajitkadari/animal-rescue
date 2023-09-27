@@ -1,7 +1,6 @@
 package io.spring.cloud.samples.animalrescue.backend.security;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +15,11 @@ import java.security.Principal;
 public class SecurityController {
 
 	@GetMapping("/whoami")
+	@Operation(
+		summary = "Retrieve user information",
+		description = "Retrieve the current authenticated user's information.",
+		tags = {"sso"}
+	)
 	public String whoami(Principal principal) {
 		if (principal == null) {
 			return "";

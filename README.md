@@ -9,6 +9,8 @@ Sample app for VMware's Spring Cloud Gateway commercial products. Features we de
 - SSO login and token relay on behalf of the routed services
 - Required scopes on routes (tag: `require-sso-scopes`)
 - Circuit breaker filter
+- OpenAPI route conversion
+- OpenAPI auto generation
 
 ![architecture](./docs/images/animal-rescue-arch.png)
 
@@ -18,6 +20,7 @@ Sample app for VMware's Spring Cloud Gateway commercial products. Features we de
 * [Deploy to Tanzu Application Service](#deploy-to-tanzu-application-service)
 * [Special frontend config related to gateway](#special-frontend-config-related-to-gateway)
 * [Gateway and Animal Rescue application features](#gateway-and-animal-rescue-application-features)
+* [OpenAPI Generation and Route Conversion](#openapi-generation-and-route-conversion-features)
 * [Development](#development)
 
 ## Deploy to Kubernetes
@@ -26,7 +29,7 @@ The Kubernetes deployment requires you to install [kustomize](https://kustomize.
 
 ### Configure Single Sign-On (SSO)
 
-For information configuring Okta as the SSO provider, see [go here](https://docs.pivotal.io/scg-k8s/1-0/sso-setup-guide.html).
+For information configuring Okta as the SSO provider, see [go here](https://docs.vmware.com/en/VMware-Spring-Cloud-Gateway-for-Kubernetes/2.0/scg-k8s/GUID-guides-sso-okta-tutorial.html).
 
 For Animal Rescue sample Single Sign-On (SSO) to work, you will need to create two text files that will be used to create Kubernetes secrets:
 
@@ -69,6 +72,7 @@ client-id={your_client_id}
 client-secret={your_client_secret}
 issuer-uri={your_issuer_uri}
 ```
+
 ### Configure Ingress
 
 The K8s deploy leverages an Ingress object to easily expose your application outside of the cluster.
@@ -77,6 +81,10 @@ Before starting, confirm that you have an ingress controller installed into your
 
 Next, edit `gateway/gateway-demo.yaml` to set the domain to your domain.
 If you don't have a domain that you can use, leveraging [`nip.io`](https://nip.io/) is a good choice.
+
+  **Important**
+  Once you have your domain, remember to configure it as an accepted `redirect_uri` in your SSO provider. Otherwise, application login will fail.
+
 
 ### Deploy with Kustomize (recommended)
 
@@ -144,10 +152,10 @@ The frontend application is implemented in ReactJS, and is pushed with static bu
 Visit `https://gateway-demo.${appsDomain}/rescue`, you should see cute animal bios with the `Adopt` buttons disabled. All the information are fetched from a public `GET` backend endpoint `/animals`.
 ![homepage](./docs/images/homepage.png)
 
-Click the `Sign in to adopt` button on the top right corner, you should be redirected to the SSO login page if you haven't already logged in to SSO.
+Click the `Sign in to adopt` button in the top right corner, you should be redirected to the SSO login page if you haven't already logged in to SSO.
 ![log in page](./docs/images/login.png)
 
-Once you logged in, you should see a greeting message regarding the username you log in with on the top right corner, and the `Adopt` buttons should be enabled.
+Once you logged in, you should see a greeting message regarding the username you log in with in the top right corner, and the `Adopt` buttons should be enabled.
 ![logged in view](./docs/images/logged-in.png)
 
 Click on the `Adopt` button, input your contact email and application notes in the model, then click `Apply`, a `POST` request should be sent to a `sso-enabled` backend endpoint `/animals/{id}/adoption-requests`, with the adopter set to your username we parsed from your token.
@@ -163,6 +171,101 @@ Click on the `Edit Adoption Request` again, you can view, edit (`PUT`), and dele
     Documentation may get out of date. Please refer to the [e2e test](./e2e/cypress/integration/) and the test output video for the most accurate user flow description.
 
 To see circuit breaker filter in action, stop `animal-rescue-frontend` application and refresh page. You should see a response from `https://example.org` web-site, this is configured in `api-route-config.json` file in `/fallback` route.
+
+## OpenAPI Generation and Route conversion features
+
+### Route Conversion
+The Spring Cloud Gateway Operator offers an OpenAPI Route Conversion Service that can be used to automate the creation of a `SpringCloudGatewayRouteConfig` based off an OpenAPI document (v2 or v3),
+The full details of this service can be [found here](https://docs.vmware.com/en/VMware-Spring-Cloud-Gateway-for-Kubernetes/2.1/scg-k8s/GUID-guides-openapi-route-conversion.html), but you fill find an example
+below of how it was used in animal rescue.
+
+The animal rescue backend exposes an OpenAPI v3 document at `/api-docs`, which is auto generated using the [springdoc](https://springdoc.org/) library.
+
+The `SpringCloudGatewayRouteConfig` for the animal rescue backend, which can be found in `/backend/k8s/animal-rescue-backend-route-config.json`
+was generated using the OpenAPI Route Conversion Service by pointing it to that OpenAPI document.
+
+The full command that was used to generate it can be found below.
+
+**Note:** In the example the Spring Cloud Gateway Operator pod has been port forwarded to port 5566. 
+
+```commandline
+curl --request POST 'http://localhost:5566/api/convert/openapi' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "service": {
+        "namespace": "animal-rescue",
+        "name": "animal-rescue-backend",
+        "ssoEnabled": true,
+        "filters": ["RateLimit=10,2s"]
+    },
+    "openapi": {
+        "location": "/api-docs"
+    },
+    "routes": [
+        {
+          "predicates": ["Method=GET","Path=/animals"],
+          "filters": [],
+          "ssoEnabled": false
+        },
+        {
+           "predicates": ["Method=GET,PUT,POST,DELETE","Path=/**"],
+            "filters": [],
+            "tokenRelay": true
+        },
+        {
+            "predicates": ["Method=GET,PUT,PATCH,POST,DELETE","Path=/actuator/**"],
+             "filters": [],
+             "ssoEnabled": false
+        }
+    ]
+}' | sed 's/Path=/Path=\/api/g' \
+   | sed 's/"animal-rescue-backend"/"animal-rescue-backend-route-config"/' 
+```
+
+The full details of how the service works can be [found here](https://docs.vmware.com/en/VMware-Spring-Cloud-Gateway-for-Kubernetes/2.1/scg-k8s/GUID-guides-openapi-route-conversion.html), but below you will
+find a brief summary of what the above command does.
+
+- Specifies the namespace/name of the service that fronts the animal rescue backend provide the path to the OpenAPI document.
+- Specifies some filters at the service level that should be applied to all routes
+- Specifies some exceptions to the service level filters at the individual route level
+  - i.e we turn off SSO for the endpoint that gets all animals as well as the actuator endpoints
+- We use sed to append the path '/api' to all the paths since that is how we want to expose the urls to the outside world.
+  - Note that by default the operator will add a `StripPrefix=1` to every route which is why we don't explicitly have to add that filter here
+- We use sed to change the default name for the generated `SpringCloudGatewayRouteConfig`. By default, it will give it the name of the service, but for consistency
+  with the other examples in this project we append "-route-config" to the name. 
+
+
+### OpenAPI Generation
+Spring Cloud Gateway for Kubernetes also offers a service to generate OpenAPI v3-compliant documentation for the gateways that it manages. 
+When combined with the Route Conversion Service mentioned above this can be a powerful way to expose the details of your APIs their consumers.
+
+By default, the service will return an array of all the OpenAPI documents of the gateways it manages. There are options, however, to restrict the documents that are retrieved. 
+The full details of this feature can be [found here](https://docs.vmware.com/en/VMware-Spring-Cloud-Gateway-for-Kubernetes/2.1/scg-k8s/GUID-guides-openapi-generation.html), 
+but below you find some details on how it can be used with animal rescue.
+
+One option is to limit the results to a single OpenAPI document for a specific gateway. You can do this by using the **namespace** and **name** of that gateway as part of the path. 
+For example, if you are port forwarding the `scg-openapi-service` to port 5566 you could get the OpenAPI document specific to the `gateway-demo`
+with the following curl call:
+
+```commandline
+curl http://localhost:5566/openapi/animal-rescue/gateway-demo
+```
+
+One thing you might notice with the call above is that the returned OpenAPI document only has routes for to the animal rescue backend, even though the `gateway-demo` also has `SpringCloudGatewayRouteDefinition` for the front end.
+(`frontend/k8s/animal-rescue-frontend-route-config.yaml`). The reason for this is that the OpenAPI Generation provides the ability to control which of your routes will show up in the generated document. In the case of 
+the animal rescue, the OpenAPI generation is turned off for everything in the route config by setting `spec.openapi.generation.enabled=false` (see example below). You also have the ability to control it
+at the route level with `spec.routes.openapi.generation.enabled`. The full details can be [found here](https://docs.vmware.com/en/VMware-Spring-Cloud-Gateway-for-Kubernetes/2.1/scg-k8s/GUID-guides-openapi-generation.html)
+routes 
+
+```commandline
+spec:
+  service:
+    name: animal-rescue-frontend
+    ssoEnabled: false
+  openapi:
+    generation:
+      enabled: false
+```
 
 ## Development
 
@@ -207,7 +310,7 @@ More detail about the e2e testing framework can be found at [cypress api doc](ht
 
 #### GitHub Actions
 
-GitHub Actions run all checks for the `master` branch and all PR requests. All workflow configuration can be found in `.github/workflows`.
+GitHub Actions run all checks for the `main` branch and all PR requests. All workflow configuration can be found in `.github/workflows`.
 
 #### Concourse
 
@@ -217,7 +320,7 @@ If you'd like to get the most updated sample app deployed in a real TAS environm
 fly -t ${yourConcourseTeamName} set-pipeline -p sample-app-to-demo-environment -c concourse/pipeline.yml -l config.yml
 ```
 
-You will need to update the slack notification settings and add the following environment variables to your concourse credentials manager. Here are the variables we set in our concourse credhub:
+You will need to update the Slack notification settings and add the following environment variables to your concourse credentials manager. Here are the variables we set in our concourse credhub:
 
 ```
 - name: /concourse/main/sample-app-to-demo-environment/CF_API_HOST

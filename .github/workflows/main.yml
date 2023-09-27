@@ -1,21 +1,27 @@
 name: Test All
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   backend-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Setup Java JDK
-      uses: actions/setup-java@v3
-      with:
-        java-version: 11
-        distribution: 'adopt'
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: 17
+          distribution: temurin
 
-    - name: Run tests
-      run: ./scripts/local.sh backend
+      - name: Run tests
+        run: ./scripts/local.sh backend
 
   e2e-test:
     runs-on: ubuntu-latest
@@ -24,13 +30,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 12.x
+          node-version: 16.20.x
 
       - name: Setup Java JDK
         uses: actions/setup-java@v3
         with:
-          java-version: 11
-          distribution: 'adopt'
+          java-version: 17
+          distribution: temurin
 
       - name: Install dependencies
         run: ./scripts/local.sh init
@@ -41,6 +47,12 @@ jobs:
           ./scripts/local.sh e2e --quiet
           ./scripts/local.sh stop
 
+      - name: Upload reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: e2e-cypress-reports
+          path: e2e/cypress/*
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +61,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 12.x
+          node-version: 16.20.x
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: 17
+          distribution: temurin
 
       - name: Install dependencies
         run: ./scripts/local.sh init
@@ -74,32 +92,33 @@ jobs:
       needs.lint.result == 'success'
     steps:
       - uses: actions/checkout@v3
+
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 12.x
+          node-version: 16.20.x
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: 17
+          distribution: temurin
+
       - name: Login to DockerHub
-        uses: docker/login-action@v1
+        uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build frontend image
         run: |
-          ./scripts/local.sh init
           ./gradlew :frontend:assemble
           docker build frontend -t springcloudservices/animal-rescue-frontend:latest
       - name: Push frontend image
         run: docker push springcloudservices/animal-rescue-frontend:latest
 
       - name: Build backend image
-        uses: mamezou-tech/buildpacks-action@master
-        with:
-          image: springcloudservices/animal-rescue-backend
-          path: backend
-          builder: gcr.io/paketo-buildpacks/builder:base-platform-api-latest
+        run: |
+          ./gradlew :backend:bootBuildImage --imageName springcloudservices/animal-rescue-backend:latest
       - name: Push backend image
         run: docker push springcloudservices/animal-rescue-backend:latest

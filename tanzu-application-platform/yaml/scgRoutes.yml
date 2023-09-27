@@ -1,7 +1,12 @@
+#@ load("@ytt:data", "data")
+
+
+---
 apiVersion: "tanzu.vmware.com/v1"
 kind: SpringCloudGatewayRouteConfig
 metadata:
   name: animal-rescue-backend-route-config
+  namespace: #@ data.values.workloadNamespace  
 spec:
   service:
     name: animal-rescue-backend
@@ -85,3 +90,68 @@ spec:
         - sso
       title: "Retrieve user information"
       description: "Retrieve the current authenticated user's information."
+---
+apiVersion: "tanzu.vmware.com/v1"
+kind: SpringCloudGatewayMapping
+metadata:
+  name: animal-rescue-backend-route-mapping
+  namespace: #@ data.values.workloadNamespace
+spec:
+  gatewayRef:
+    name: animal-rescue-gateway
+  routeConfigRef:
+    name: animal-rescue-backend-route-config
+---
+apiVersion: "tanzu.vmware.com/v1"
+kind: SpringCloudGatewayRouteConfig
+metadata:
+  name: animal-rescue-frontend-route-config
+  namespace: #@ data.values.workloadNamespace  
+spec:
+  service:
+    name: animal-rescue-frontend
+    ssoEnabled: false
+  openapi:
+    generation:
+      enabled: false
+  routes:
+    - ssoEnabled: true
+      predicates:
+        - Path=/rescue/login
+        - Method=GET
+      filters:
+        - RedirectTo=302, /rescue
+      order: 0
+      tags:
+        - sso
+      title: "Animal Rescue login link"
+      description: "SSO enabled path used by the login button"
+    - predicates:
+        - Path=/
+        - Method=GET
+      filters:
+        - RedirectTo=302, /rescue
+      tags:
+        - ui
+      title: "Animal Rescue home page"
+      description: "Animal Rescue home page that doesn't require SSO login"
+    - predicates:
+        - Path=/rescue/**
+        - Method=GET
+      order: 1000
+      tags:
+        - ui
+      title: "Animal Rescue UI Pages"
+      description: "Animal Rescue UI pages that don't require SSO login"
+---
+apiVersion: "tanzu.vmware.com/v1"
+kind: SpringCloudGatewayMapping
+metadata:
+  name: animal-rescue-frontend-route-mapping
+  namespace: #@ data.values.workloadNamespace
+spec:
+  gatewayRef:
+    name: animal-rescue-gateway
+  routeConfigRef:
+    name: animal-rescue-frontend-route-config
+    
